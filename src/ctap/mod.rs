@@ -42,7 +42,7 @@ use self::command::{
 use self::config_command::process_config;
 use self::credential_management::process_credential_management;
 use self::crypto_wrapper::{
-    decrypt_credential_source, encrypt_key_handle, PrivateKey, MAX_CREDENTIAL_ID_SIZE,
+    decrypt_credential_source, encrypt_key_handle, PrivateKey, PublicKey, Signature, MAX_CREDENTIAL_ID_SIZE,
 };
 use self::data_formats::{
     AuthenticatorTransport, CoseKey, CoseSignature, CredentialProtectionPolicy,
@@ -214,10 +214,10 @@ fn verify_signature(
     signed_hash: &[u8; 32],
 ) -> Result<(), Ctap2StatusCode> {
     let signature =
-        ecdsa::Signature::try_from(signature.ok_or(Ctap2StatusCode::CTAP2_ERR_MISSING_PARAMETER)?)?;
+        Signature::try_from(signature.ok_or(Ctap2StatusCode::CTAP2_ERR_MISSING_PARAMETER)?)?;
     let cbor_public_key = cbor_read(public_key_bytes)?;
     let cose_key = CoseKey::try_from(cbor_public_key)?;
-    let public_key = ecdsa::PubKey::try_from(cose_key)?;
+    let public_key = PublicKey::try_from(cose_key)?;
     if !public_key.verify_hash_vartime(signed_hash, &signature) {
         return Err(Ctap2StatusCode::CTAP2_ERR_INTEGRITY_FAILURE);
     }

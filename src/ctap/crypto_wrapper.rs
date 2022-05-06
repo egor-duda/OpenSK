@@ -95,9 +95,25 @@ pub fn aes256_cbc_decrypt(
 }
 
 /// An asymmetric private key that can sign messages.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub enum PrivateKey {
     EcdsaKey(ecdsa::SecKey),
+}
+
+impl Clone for PrivateKey {
+    fn clone(&self) -> Self {
+        match self {
+            Self::EcdsaKey(sk) => PrivateKey::EcdsaKey (sk.clone ()),
+        }
+    }
+}
+
+impl PartialEq for PrivateKey {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (&Self::EcdsaKey(ref a), &Self::EcdsaKey(ref b)) => a == b,
+        }
+    }
 }
 
 impl PrivateKey {
@@ -185,6 +201,30 @@ impl TryFrom<cbor::Value> for PrivateKey {
 impl From<ecdsa::SecKey> for PrivateKey {
     fn from(ecdsa_key: ecdsa::SecKey) -> Self {
         PrivateKey::EcdsaKey(ecdsa_key)
+    }
+}
+
+pub enum PublicKey {
+    EcdsaPublicKey(ecdsa::PubKey),
+}
+
+impl PublicKey {
+    pub fn verify_hash_vartime(&self, hash: &[u8; ecdsa::NBYTES], sign: &Signature) -> bool {
+        match (self, sign) {
+            (Self::EcdsaPublicKey(public_key), Signature::EcdsaSignature(signature)) => public_key.verify_hash_vartime(hash,signature),
+        }
+    }
+}
+
+pub enum Signature {
+    EcdsaSignature(ecdsa::Signature),
+}
+
+impl Signature {
+    pub fn to_bytes(&self, bytes: &mut [u8; ecdsa::Signature::BYTES_LENGTH]) {
+        match self {
+            Self::EcdsaSignature(ecdsa_signature) => ecdsa_signature.to_bytes(bytes),
+        }
     }
 }
 

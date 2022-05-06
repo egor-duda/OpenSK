@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::crypto_wrapper::PrivateKey;
+use super::crypto_wrapper::{PrivateKey,PublicKey,Signature};
 use super::status_code::Ctap2StatusCode;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -846,7 +846,7 @@ impl TryFrom<CoseKey> for ecdh::PubKey {
     }
 }
 
-impl TryFrom<CoseKey> for ecdsa::PubKey {
+impl TryFrom<CoseKey> for PublicKey {
     type Error = Ctap2StatusCode;
 
     fn try_from(cose_key: CoseKey) -> Result<Self, Ctap2StatusCode> {
@@ -859,8 +859,11 @@ impl TryFrom<CoseKey> for ecdsa::PubKey {
         if algorithm != ES256_ALGORITHM {
             return Err(Ctap2StatusCode::CTAP2_ERR_UNSUPPORTED_ALGORITHM);
         }
-        ecdsa::PubKey::from_coordinates(&x_bytes, &y_bytes)
-            .ok_or(Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)
+        if let Some(pkey) = ecdsa::PubKey::from_coordinates(&x_bytes, &y_bytes) {
+            Ok(PublicKey::EcdsaPublicKey(pkey))
+        } else {
+            Err(Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)
+        }
     }
 }
 
@@ -897,13 +900,18 @@ impl TryFrom<cbor::Value> for CoseSignature {
     }
 }
 
-impl TryFrom<CoseSignature> for ecdsa::Signature {
+impl TryFrom<CoseSignature> for Signature {
     type Error = Ctap2StatusCode;
 
     fn try_from(cose_signature: CoseSignature) -> Result<Self, Ctap2StatusCode> {
         match cose_signature.algorithm {
-            SignatureAlgorithm::ES256 => ecdsa::Signature::from_bytes(&cose_signature.bytes)
-                .ok_or(Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER),
+            SignatureAlgorithm::ES256 => {
+                if let Some (ecdsa_sig) = ecdsa::Signature::from_bytes(&cose_signature.bytes) {
+                    Ok(Signature::EcdsaSignature(ecdsa_sig))
+                } else {
+                    Err(Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)
+                }
+            },
             SignatureAlgorithm::Unknown => Err(Ctap2StatusCode::CTAP2_ERR_UNSUPPORTED_ALGORITHM),
         }
     }
@@ -1932,7 +1940,7 @@ mod test {
             "signature" => bytes,
         };
         let cose_signature = CoseSignature::try_from(cbor_value).unwrap();
-        let created_signature = crypto::ecdsa::Signature::try_from(cose_signature).unwrap();
+        let created_signature = Signature::try_from(cose_signature).unwrap();
         let mut created_bytes = [0; ecdsa::Signature::BYTES_LENGTH];
         created_signature.to_bytes(&mut created_bytes);
         assert_eq!(bytes[..], created_bytes[..]);
@@ -1950,7 +1958,7 @@ mod test {
             "signature" => bytes,
         };
         let cose_signature = CoseSignature::try_from(cbor_value).unwrap();
-        let created_signature = crypto::ecdsa::Signature::try_from(cose_signature);
+        let created_signature = Signature::try_from(cose_signature);
         // Can not compare directly, since ecdsa::Signature does not implement Debug.
         assert_eq!(
             created_signature.err(),
