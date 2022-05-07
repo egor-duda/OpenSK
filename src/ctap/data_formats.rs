@@ -28,6 +28,7 @@ use sk_cbor::{cbor_array_vec, cbor_map, cbor_map_options, destructure_cbor_map};
 
 // Used as the identifier for ECDSA in assertion signatures and COSE.
 const ES256_ALGORITHM: i64 = -7;
+const EDDSA_ALGORITHM: i64 = -8;
 
 // https://www.w3.org/TR/webauthn/#dictdef-publickeycredentialrpentity
 #[derive(Clone, Debug, PartialEq)]
@@ -503,6 +504,7 @@ impl From<PackedAttestationStatement> for cbor::Value {
 #[cfg_attr(feature = "fuzz", derive(Arbitrary))]
 pub enum SignatureAlgorithm {
     ES256 = ES256_ALGORITHM as isize,
+    EDDSA = EDDSA_ALGORITHM as isize,
     // This is the default for all numbers not covered above.
     // Unknown types should be ignored, instead of returning errors.
     Unknown = 0,
@@ -518,6 +520,7 @@ impl From<i64> for SignatureAlgorithm {
     fn from(int: i64) -> Self {
         match int {
             ES256_ALGORITHM => SignatureAlgorithm::ES256,
+            EDDSA_ALGORITHM => SignatureAlgorithm::EDDSA,
             _ => SignatureAlgorithm::Unknown,
         }
     }
@@ -720,6 +723,8 @@ pub struct CoseKey {
     x_bytes: [u8; ecdh::NBYTES],
     y_bytes: [u8; ecdh::NBYTES],
     algorithm: i64,
+    key_type: i64,
+    curve: i64,
 }
 
 impl CoseKey {
@@ -729,8 +734,12 @@ impl CoseKey {
     const ECDH_ALGORITHM: i64 = -25;
     // The parameter behind map key 1.
     const EC2_KEY_TYPE: i64 = 2;
+    #[cfg(feature = "with_ed25519")]
+    const OKP_KEY_TYPE: i64 = 1;
     // The parameter behind map key -1.
-    const P_256_CURVE: i64 = 1;
+    pub const P_256_CURVE: i64 = 1;
+    #[cfg(feature = "with_ed25519")]
+    pub const ED25519_CURVE: i64 = 6;
 }
 
 // This conversion accepts both ECDH and ECDSA.
@@ -776,6 +785,8 @@ impl TryFrom<cbor::Value> for CoseKey {
             x_bytes: *array_ref![x_bytes.as_slice(), 0, ecdh::NBYTES],
             y_bytes: *array_ref![y_bytes.as_slice(), 0, ecdh::NBYTES],
             algorithm,
+            key_type,
+            curve,
         })
     }
 }
@@ -786,12 +797,14 @@ impl From<CoseKey> for cbor::Value {
             x_bytes,
             y_bytes,
             algorithm,
+            key_type,
+            curve,
         } = cose_key;
 
         cbor_map! {
-            1 => CoseKey::EC2_KEY_TYPE,
+            1 => key_type,
             3 => algorithm,
-            -1 => CoseKey::P_256_CURVE,
+            -1 => curve,
             -2 => x_bytes,
             -3 => y_bytes,
         }
@@ -807,6 +820,8 @@ impl From<ecdh::PubKey> for CoseKey {
             x_bytes,
             y_bytes,
             algorithm: CoseKey::ECDH_ALGORITHM,
+            key_type: CoseKey::EC2_KEY_TYPE,
+            curve: CoseKey::P_256_CURVE,
         }
     }
 }
@@ -820,6 +835,21 @@ impl From<ecdsa::PubKey> for CoseKey {
             x_bytes,
             y_bytes,
             algorithm: ES256_ALGORITHM,
+            key_type: CoseKey::EC2_KEY_TYPE,
+            curve: CoseKey::P_256_CURVE,
+        }
+    }
+}
+
+#[cfg(feature = "with_ed25519")]
+impl From<ed25519_dalek::PublicKey> for CoseKey {
+    fn from(pk: ed25519_dalek::PublicKey) -> Self {
+        CoseKey {
+            x_bytes: pk.to_bytes(),
+            y_bytes: [0u8; 32],
+            key_type: CoseKey::OKP_KEY_TYPE,
+            curve: CoseKey::ED25519_CURVE,
+            algorithm: EDDSA_ALGORITHM,
         }
     }
 }
@@ -832,6 +862,8 @@ impl TryFrom<CoseKey> for ecdh::PubKey {
             x_bytes,
             y_bytes,
             algorithm,
+            key_type,
+            curve,
         } = cose_key;
 
         // Since algorithm can be used for different COSE key types, we check
@@ -839,6 +871,9 @@ impl TryFrom<CoseKey> for ecdh::PubKey {
         // the algorithm ES256_ALGORITHM is allowed here too.
         // https://github.com/google/OpenSK/issues/90
         if algorithm != CoseKey::ECDH_ALGORITHM && algorithm != ES256_ALGORITHM {
+            return Err(Ctap2StatusCode::CTAP2_ERR_UNSUPPORTED_ALGORITHM);
+        }
+        if key_type != CoseKey::EC2_KEY_TYPE || curve != CoseKey::P_256_CURVE {
             return Err(Ctap2StatusCode::CTAP2_ERR_UNSUPPORTED_ALGORITHM);
         }
         ecdh::PubKey::from_coordinates(&x_bytes, &y_bytes)
@@ -854,15 +889,33 @@ impl TryFrom<CoseKey> for PublicKey {
             x_bytes,
             y_bytes,
             algorithm,
+            key_type,
+            curve,
         } = cose_key;
 
-        if algorithm != ES256_ALGORITHM {
-            return Err(Ctap2StatusCode::CTAP2_ERR_UNSUPPORTED_ALGORITHM);
-        }
-        if let Some(pkey) = ecdsa::PubKey::from_coordinates(&x_bytes, &y_bytes) {
-            Ok(PublicKey::EcdsaPublicKey(pkey))
-        } else {
-            Err(Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)
+        match algorithm {
+            ES256_ALGORITHM => {
+                if key_type != CoseKey::EC2_KEY_TYPE || curve != CoseKey::P_256_CURVE {
+                    return Err(Ctap2StatusCode::CTAP2_ERR_UNSUPPORTED_ALGORITHM);
+                }
+                if let Some(pkey) = ecdsa::PubKey::from_coordinates(&x_bytes, &y_bytes) {
+                    Ok(PublicKey::EcdsaPublicKey(pkey))
+                } else {
+                    Err(Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)
+                }
+            },
+            #[cfg(feature = "with_ed25519")]
+            EDDSA_ALGORITHM => {
+                if key_type != CoseKey::OKP_KEY_TYPE || curve != CoseKey::ED25519_CURVE {
+                    return Err(Ctap2StatusCode::CTAP2_ERR_UNSUPPORTED_ALGORITHM);
+                }
+                if let Some (pkey) = ed25519_dalek::PublicKey::from_bytes (&x_bytes).ok() {
+                    Ok(PublicKey::Ed25519PublicKey(pkey))
+                } else {
+                    Err(Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)
+                }
+            },
+            _ => Err(Ctap2StatusCode::CTAP2_ERR_UNSUPPORTED_ALGORITHM)
         }
     }
 }
@@ -873,7 +926,7 @@ impl TryFrom<CoseKey> for PublicKey {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CoseSignature {
     pub algorithm: SignatureAlgorithm,
-    pub bytes: [u8; ecdsa::Signature::BYTES_LENGTH],
+    pub bytes: [u8; Signature::BYTES_LENGTH],
 }
 
 impl TryFrom<cbor::Value> for CoseSignature {
@@ -889,13 +942,13 @@ impl TryFrom<cbor::Value> for CoseSignature {
 
         let algorithm = SignatureAlgorithm::try_from(ok_or_missing(algorithm)?)?;
         let bytes = extract_byte_string(ok_or_missing(bytes)?)?;
-        if bytes.len() != ecdsa::Signature::BYTES_LENGTH {
+        if bytes.len() != Signature::BYTES_LENGTH {
             return Err(Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER);
         }
 
         Ok(CoseSignature {
             algorithm,
-            bytes: *array_ref![bytes.as_slice(), 0, ecdsa::Signature::BYTES_LENGTH],
+            bytes: *array_ref![bytes.as_slice(), 0, Signature::BYTES_LENGTH],
         })
     }
 }
@@ -912,6 +965,12 @@ impl TryFrom<CoseSignature> for Signature {
                     Err(Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)
                 }
             },
+            #[cfg(feature = "with_ed25519")]
+            SignatureAlgorithm::EDDSA => {
+                Ok(Signature::Ed25519Signature(ed25519_dalek::Signature::from(cose_signature.bytes)))
+            },
+            #[cfg(not(feature = "with_ed25519"))]
+            SignatureAlgorithm::EDDSA => Err(Ctap2StatusCode::CTAP2_ERR_UNSUPPORTED_ALGORITHM),
             SignatureAlgorithm::Unknown => Err(Ctap2StatusCode::CTAP2_ERR_UNSUPPORTED_ALGORITHM),
         }
     }
@@ -1933,7 +1992,7 @@ mod test {
         let mut env = TestEnv::new();
         let sk = crypto::ecdsa::SecKey::gensk(env.rng());
         let dummy_signature = sk.sign_rfc6979::<Sha256>(&[]);
-        let mut bytes = [0; ecdsa::Signature::BYTES_LENGTH];
+        let mut bytes = [0; Signature::BYTES_LENGTH];
         dummy_signature.to_bytes(&mut bytes);
         let cbor_value = cbor_map! {
             "alg" => ES256_ALGORITHM,
@@ -1941,7 +2000,7 @@ mod test {
         };
         let cose_signature = CoseSignature::try_from(cbor_value).unwrap();
         let created_signature = Signature::try_from(cose_signature).unwrap();
-        let mut created_bytes = [0; ecdsa::Signature::BYTES_LENGTH];
+        let mut created_bytes = [0; Signature::BYTES_LENGTH];
         created_signature.to_bytes(&mut created_bytes);
         assert_eq!(bytes[..], created_bytes[..]);
     }
@@ -1951,7 +2010,7 @@ mod test {
         let mut env = TestEnv::new();
         let sk = crypto::ecdsa::SecKey::gensk(env.rng());
         let dummy_signature = sk.sign_rfc6979::<Sha256>(&[]);
-        let mut bytes = [0; ecdsa::Signature::BYTES_LENGTH];
+        let mut bytes = [0; Signature::BYTES_LENGTH];
         dummy_signature.to_bytes(&mut bytes);
         let cbor_value = cbor_map! {
             "alg" => -1, // unused algorithm
@@ -1970,7 +2029,7 @@ mod test {
     fn test_cose_signature_wrong_signature_length() {
         let cbor_value = cbor_map! {
             "alg" => ES256_ALGORITHM,
-            "signature" => [0; ecdsa::Signature::BYTES_LENGTH - 1],
+            "signature" => [0; Signature::BYTES_LENGTH - 1],
         };
         assert_eq!(
             CoseSignature::try_from(cbor_value),
@@ -1978,7 +2037,7 @@ mod test {
         );
         let cbor_value = cbor_map! {
             "alg" => ES256_ALGORITHM,
-            "signature" => [0; ecdsa::Signature::BYTES_LENGTH + 1],
+            "signature" => [0; Signature::BYTES_LENGTH + 1],
         };
         assert_eq!(
             CoseSignature::try_from(cbor_value),

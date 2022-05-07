@@ -315,8 +315,8 @@ impl Ctap1Command {
         if let Some(credential_source) = credential_source {
             let ecdsa_key = match credential_source.private_key {
                 PrivateKey::EcdsaKey(k) => k,
-                // With the introduction of different algorithms, add:
-                // _ => return Err(Ctap1StatusCode::SW_WRONG_DATA),
+                #[cfg(feature = "with_ed25519")]
+                _ => return Err(Ctap1StatusCode::SW_WRONG_DATA),
             };
             if flags == Ctap1Flags::CheckOnly {
                 return Err(Ctap1StatusCode::SW_COND_USE_NOT_SATISFIED);

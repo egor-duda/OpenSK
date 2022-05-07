@@ -76,7 +76,7 @@ use byteorder::{BigEndian, ByteOrder};
 use core::convert::TryFrom;
 use crypto::hmac::hmac_256;
 use crypto::sha256::Sha256;
-use crypto::{ecdsa, Hash256};
+use crypto::Hash256;
 use embedded_time::duration::Milliseconds;
 use rng256::Rng256;
 use sk_cbor as cbor;
@@ -3128,7 +3128,7 @@ mod test {
         let signed_hash = Sha256::hash(&message);
         let signature = private_key.sign_rfc6979::<Sha256>(&message);
 
-        let mut signature_bytes = [0; ecdsa::Signature::BYTES_LENGTH];
+        let mut signature_bytes = [0; Signature::BYTES_LENGTH];
         signature.to_bytes(&mut signature_bytes);
         let cose_signature = CoseSignature {
             algorithm: SignatureAlgorithm::ES256,
@@ -3201,7 +3201,7 @@ mod test {
         let metadata_hash = Sha256::hash(&metadata).to_vec();
 
         let signature = private_key.sign_rfc6979::<Sha256>(&signed_over_data);
-        let mut signature_bytes = [0; ecdsa::Signature::BYTES_LENGTH];
+        let mut signature_bytes = [0; Signature::BYTES_LENGTH];
         signature.to_bytes(&mut signature_bytes);
         let cose_signature = CoseSignature {
             algorithm: SignatureAlgorithm::ES256,
