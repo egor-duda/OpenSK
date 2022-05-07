@@ -442,8 +442,6 @@ class OpenSKInstaller:
         f"link-arg=-T{props.app_ldscript}",
         "-C",
         "relocation-model=static",
-        "-D",
-        "warnings",
         f"--remap-path-prefix={os.getcwd()}=",
         "-C",
         "link-arg=-icf=all",
