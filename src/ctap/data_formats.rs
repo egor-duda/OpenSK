@@ -1630,24 +1630,42 @@ mod test {
         let signature_algorithm = SignatureAlgorithm::from(alg_int);
         assert_eq!(signature_algorithm, SignatureAlgorithm::ES256);
 
+        #[cfg(feature = "with_ed25519")]
+        {
+            let alg_int = SignatureAlgorithm::EDDSA as i64;
+            let signature_algorithm = SignatureAlgorithm::from(alg_int);
+            assert_eq!(signature_algorithm, SignatureAlgorithm::EDDSA);
+        }
+
         let unknown_alg_int = -1;
         let unknown_algorithm = SignatureAlgorithm::from(unknown_alg_int);
         assert_eq!(unknown_algorithm, SignatureAlgorithm::Unknown);
     }
 
-    #[test]
-    fn test_from_into_signature_algorithm() {
-        let cbor_signature_algorithm: cbor::Value = cbor_int!(ES256_ALGORITHM);
+    fn test_from_into_signature_algorithm(alg: i64, expected_signature_algorithm: SignatureAlgorithm) {
+        let cbor_signature_algorithm: cbor::Value = cbor_int!(alg);
         let signature_algorithm = SignatureAlgorithm::try_from(cbor_signature_algorithm.clone());
-        let expected_signature_algorithm = SignatureAlgorithm::ES256;
         assert_eq!(signature_algorithm, Ok(expected_signature_algorithm));
-        let created_cbor: cbor::Value = signature_algorithm.unwrap().into();
-        assert_eq!(created_cbor, cbor_signature_algorithm);
+        if alg != -1 {
+            let created_cbor: cbor::Value = signature_algorithm.unwrap().into();
+            assert_eq!(created_cbor, cbor_signature_algorithm);
+        }
+    }
 
-        let cbor_unknown_algorithm: cbor::Value = cbor_int!(-1);
-        let unknown_algorithm = SignatureAlgorithm::try_from(cbor_unknown_algorithm);
-        let expected_unknown_algorithm = SignatureAlgorithm::Unknown;
-        assert_eq!(unknown_algorithm, Ok(expected_unknown_algorithm));
+    #[test]
+    fn test_from_into_ecdsa_signature_algorithm() {
+        test_from_into_signature_algorithm(ES256_ALGORITHM, SignatureAlgorithm::ES256);
+    }
+
+    #[test]
+    fn test_from_into_invalid_signature_algorithm() {
+        test_from_into_signature_algorithm(-1, SignatureAlgorithm::Unknown);
+    }
+
+    #[test]
+    #[cfg(feature = "with_ed25519")]
+    fn test_from_into_ed25519_signature_algorithm() {
+        test_from_into_signature_algorithm(EDDSA_ALGORITHM, SignatureAlgorithm::EDDSA);
     }
 
     #[test]

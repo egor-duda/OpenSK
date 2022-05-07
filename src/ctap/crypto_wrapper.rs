@@ -461,11 +461,32 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "with_ed25519")]
+    fn test_new_ed25519_from_bytes() {
+        let mut env = TestEnv::new();
+        let private_key = PrivateKey::new(env.rng(), SignatureAlgorithm::EDDSA);
+        let key_bytes = private_key.to_bytes();
+        assert_eq!(
+            PrivateKey::new_ed25519_from_bytes(&key_bytes),
+            Some(private_key)
+        );
+    }
+
+    #[test]
     fn test_new_ecdsa_from_bytes_wrong_length() {
         assert_eq!(PrivateKey::new_ecdsa_from_bytes(&[0x55; 16]), None);
         assert_eq!(PrivateKey::new_ecdsa_from_bytes(&[0x55; 31]), None);
         assert_eq!(PrivateKey::new_ecdsa_from_bytes(&[0x55; 33]), None);
         assert_eq!(PrivateKey::new_ecdsa_from_bytes(&[0x55; 64]), None);
+    }
+
+    #[test]
+    #[cfg(feature = "with_ed25519")]
+    fn test_new_ed25519_from_bytes_wrong_length() {
+        assert_eq!(PrivateKey::new_ed25519_from_bytes(&[0x55; 16]), None);
+        assert_eq!(PrivateKey::new_ed25519_from_bytes(&[0x55; 31]), None);
+        assert_eq!(PrivateKey::new_ed25519_from_bytes(&[0x55; 33]), None);
+        assert_eq!(PrivateKey::new_ed25519_from_bytes(&[0x55; 64]), None);
     }
 
     #[test]
@@ -487,26 +508,56 @@ mod test {
         assert_eq!(private_key.sign_and_encode(&message), signature);
     }
 
-    #[test]
-    fn test_private_key_signature_algorithm() {
+    fn test_private_key_signature_algorithm(signature_algorithm: SignatureAlgorithm) {
         let mut env = TestEnv::new();
-        let algorithm = SignatureAlgorithm::ES256;
-        let private_key = PrivateKey::new(env.rng(), algorithm);
-        assert_eq!(private_key.signature_algorithm(), algorithm);
+        let private_key = PrivateKey::new(env.rng(), signature_algorithm);
+        assert_eq!(private_key.signature_algorithm(), signature_algorithm);
     }
 
     #[test]
-    fn test_private_key_from_to_cbor() {
+    fn test_ecdsa_private_key_signature_algorithm() {
+        test_private_key_signature_algorithm(SignatureAlgorithm::ES256);
+    }
+
+    #[test]
+    #[cfg(feature = "with_ed25519")]
+    fn test_ed25519_private_key_signature_algorithm() {
+        test_private_key_signature_algorithm(SignatureAlgorithm::EDDSA);
+    }
+
+    fn test_private_key_from_to_cbor(signature_algorithm: SignatureAlgorithm) {
         let mut env = TestEnv::new();
-        let private_key = PrivateKey::new(env.rng(), SignatureAlgorithm::ES256);
+        let private_key = PrivateKey::new(env.rng(), signature_algorithm);
         let cbor = cbor::Value::from(private_key.clone());
         assert_eq!(PrivateKey::try_from(cbor), Ok(private_key),);
+    }
+
+    #[test]
+    fn test_ecdsa_private_key_from_to_cbor() {
+        test_private_key_from_to_cbor(SignatureAlgorithm::ES256);
+    }
+
+    #[test]
+    #[cfg(feature = "with_ed25519")]
+    fn test_ed25519_private_key_from_to_cbor() {
+        test_private_key_from_to_cbor(SignatureAlgorithm::EDDSA);
     }
 
     #[test]
     fn test_private_key_from_bad_cbor() {
         let cbor = cbor_array![
             cbor_int!(SignatureAlgorithm::ES256 as i64),
+            cbor_bytes!(vec![0x88; 32]),
+            // The array is too long.
+            cbor_int!(0),
+        ];
+        assert_eq!(
+            PrivateKey::try_from(cbor),
+            Err(Ctap2StatusCode::CTAP2_ERR_INVALID_CBOR),
+        );
+
+        let cbor = cbor_array![
+            cbor_int!(SignatureAlgorithm::EDDSA as i64),
             cbor_bytes!(vec![0x88; 32]),
             // The array is too long.
             cbor_int!(0),
@@ -527,11 +578,10 @@ mod test {
         );
     }
 
-    #[test]
-    fn test_encrypt_decrypt_credential() {
+    fn test_encrypt_decrypt_credential(signature_algorithm: SignatureAlgorithm) {
         let mut env = TestEnv::new();
         storage::init(&mut env).ok().unwrap();
-        let private_key = PrivateKey::new(env.rng(), SignatureAlgorithm::ES256);
+        let private_key = PrivateKey::new(env.rng(), signature_algorithm);
 
         let rp_id_hash = [0x55; 32];
         let encrypted_id = encrypt_key_handle(&mut env, &private_key, &rp_id_hash).unwrap();
@@ -543,10 +593,20 @@ mod test {
     }
 
     #[test]
-    fn test_encrypt_decrypt_bad_hmac() {
+    fn test_encrypt_decrypt_ecdsa_credential() {
+        test_encrypt_decrypt_credential(SignatureAlgorithm::ES256);
+    }
+
+    #[test]
+    #[cfg(feature = "with_ed25519")]
+    fn test_encrypt_decrypt_ed25519_credential() {
+        test_encrypt_decrypt_credential(SignatureAlgorithm::EDDSA);
+    }
+
+    fn test_encrypt_decrypt_bad_hmac(signature_algorithm: SignatureAlgorithm) {
         let mut env = TestEnv::new();
         storage::init(&mut env).ok().unwrap();
-        let private_key = PrivateKey::new(env.rng(), SignatureAlgorithm::ES256);
+        let private_key = PrivateKey::new(env.rng(), signature_algorithm);
 
         let rp_id_hash = [0x55; 32];
         let encrypted_id = encrypt_key_handle(&mut env, &private_key, &rp_id_hash).unwrap();
@@ -562,10 +622,20 @@ mod test {
     }
 
     #[test]
-    fn test_decrypt_credential_missing_blocks() {
+    fn test_ecdsa_encrypt_decrypt_bad_hmac() {
+        test_encrypt_decrypt_bad_hmac(SignatureAlgorithm::ES256);
+    }
+
+    #[test]
+    #[cfg(feature = "with_ed25519")]
+    fn test_ed25519_encrypt_decrypt_bad_hmac() {
+        test_encrypt_decrypt_bad_hmac(SignatureAlgorithm::EDDSA);
+    }
+
+    fn test_decrypt_credential_missing_blocks(signature_algorithm: SignatureAlgorithm) {
         let mut env = TestEnv::new();
         storage::init(&mut env).ok().unwrap();
-        let private_key = PrivateKey::new(env.rng(), SignatureAlgorithm::ES256);
+        let private_key = PrivateKey::new(env.rng(), signature_algorithm);
 
         let rp_id_hash = [0x55; 32];
         let encrypted_id = encrypt_key_handle(&mut env, &private_key, &rp_id_hash).unwrap();
@@ -576,6 +646,17 @@ mod test {
                 Ok(None)
             );
         }
+    }
+
+    #[test]
+    fn test_ecdsa_decrypt_credential_missing_blocks() {
+        test_decrypt_credential_missing_blocks(SignatureAlgorithm::ES256);
+    }
+
+    #[test]
+    #[cfg(feature = "with_ed25519")]
+    fn test_ed25519_decrypt_credential_missing_blocks() {
+        test_decrypt_credential_missing_blocks(SignatureAlgorithm::EDDSA);
     }
 
     /// This is a copy of the function that genereated deprecated key handles.
