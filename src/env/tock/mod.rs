@@ -3,7 +3,9 @@ use crate::api::customization::{CustomizationImpl, DEFAULT_CUSTOMIZATION};
 use crate::api::firmware_protection::FirmwareProtection;
 use crate::ctap::status_code::Ctap2StatusCode;
 use crate::ctap::{Channel, Transport};
-use crate::env::{Env, IOChannel, SendOrRecvStatus, UserPresence};
+use crate::env::{
+    CtapHidChannel, Env, SendOrRecvError, SendOrRecvResult, SendOrRecvStatus, UserPresence,
+};
 use core::cell::Cell;
 use core::sync::atomic::{AtomicBool, Ordering};
 use libtock_core::result::{CommandError, EALREADY};
@@ -21,50 +23,31 @@ pub struct TockEnv {
     rng: TockRng256,
     store: Store<TockStorage>,
     upgrade_storage: Option<TockUpgradeStorage>,
-    io_channel: TockIOChannel,
+    main_channel: TockCtapHidChannel,
+    #[cfg(feature = "vendor_hid")]
+    vendor_channel: TockCtapHidChannel,
 }
 
-pub struct TockIOChannel {}
+pub struct TockCtapHidChannel {
+    transport: Transport,
+}
 
-impl IOChannel for TockIOChannel {
-    fn recv_with_timeout(
-        &mut self,
-        buf: &mut [u8; 64],
-        timeout: isize,
-    ) -> Option<SendOrRecvStatus> {
-        let usb_interface = match usb_ctap_hid::recv_with_timeout(buf, Duration::from_ms(timeout)) {
-            Some(usb_ctap_hid::SendOrRecvStatus::Received(interface)) => interface,
-            Some(_) => {
-                return Some(SendOrRecvStatus::Error);
-            }
-            None => {
-                return None;
-            }
-        };
-        Some(SendOrRecvStatus::Received(transport_for_interface(
-            usb_interface,
-        )))
-    }
+impl CtapHidChannel for TockCtapHidChannel {
     fn send_or_recv_with_timeout(
         &mut self,
         buf: &mut [u8; 64],
         timeout: isize,
-        transport: Transport,
-    ) -> Option<SendOrRecvStatus> {
-        let interface = match transport {
+    ) -> SendOrRecvResult {
+        let interface = match self.transport {
             Transport::MainHid => usb_ctap_hid::UsbInterface::MainHid,
             #[cfg(feature = "vendor_hid")]
             Transport::VendorHid => usb_ctap_hid::UsbInterface::VendorHid,
         };
-        let status =
-            usb_ctap_hid::send_or_recv_with_timeout(buf, Duration::from_ms(timeout), interface);
-        match status {
-            Some(usb_ctap_hid::SendOrRecvStatus::Error) => Some(SendOrRecvStatus::Error),
-            Some(usb_ctap_hid::SendOrRecvStatus::Sent) => Some(SendOrRecvStatus::Sent),
-            Some(usb_ctap_hid::SendOrRecvStatus::Received(usb_interface)) => Some(
-                SendOrRecvStatus::Received(transport_for_interface(usb_interface)),
-            ),
-            None => None,
+        match usb_ctap_hid::send_or_recv_with_timeout(buf, Duration::from_ms(timeout), interface) {
+            Some(usb_ctap_hid::SendOrRecvStatus::Error) => Err(SendOrRecvError),
+            Some(usb_ctap_hid::SendOrRecvStatus::Sent) => Ok(SendOrRecvStatus::Sent),
+            Some(usb_ctap_hid::SendOrRecvStatus::Received(_)) => Ok(SendOrRecvStatus::Received),
+            None => Ok(SendOrRecvStatus::TimedOut),
         }
     }
 }
@@ -80,12 +63,17 @@ impl TockEnv {
         let storage = take_storage().unwrap();
         let store = Store::new(storage).ok().unwrap();
         let upgrade_storage = TockUpgradeStorage::new().ok();
-        let io_channel = TockIOChannel {};
         TockEnv {
             rng: TockRng256 {},
             store,
             upgrade_storage,
-            io_channel,
+            main_channel: TockCtapHidChannel {
+                transport: Transport::MainHid,
+            },
+            #[cfg(feature = "vendor_hid")]
+            vendor_channel: TockCtapHidChannel {
+                transport: Transport::VendorHid,
+            },
         }
     }
 }
@@ -129,7 +117,7 @@ impl Env for TockEnv {
     type FirmwareProtection = Self;
     type Write = Console;
     type Customization = CustomizationImpl;
-    type IOChannel = TockIOChannel;
+    type CtapHidChannel = TockCtapHidChannel;
 
     fn rng(&mut self) -> &mut Self::Rng {
         &mut self.rng
@@ -159,16 +147,13 @@ impl Env for TockEnv {
         &DEFAULT_CUSTOMIZATION
     }
 
-    fn io_channel(&mut self) -> &mut Self::IOChannel {
-        &mut self.io_channel
+    fn main_hid_channel(&mut self) -> &mut Self::CtapHidChannel {
+        &mut self.main_channel
     }
-}
 
-fn transport_for_interface(usb_interface: usb_ctap_hid::UsbInterface) -> Transport {
-    match usb_interface {
-        usb_ctap_hid::UsbInterface::MainHid => Transport::MainHid,
-        #[cfg(feature = "vendor_hid")]
-        usb_ctap_hid::UsbInterface::VendorHid => Transport::VendorHid,
+    #[cfg(feature = "vendor_hid")]
+    fn vendor_hid_channel(&mut self) -> &mut Self::CtapHidChannel {
+        &mut self.vendor_channel
     }
 }
 

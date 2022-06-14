@@ -2,7 +2,7 @@ use crate::api::customization::Customization;
 use crate::api::firmware_protection::FirmwareProtection;
 use crate::api::upgrade_storage::UpgradeStorage;
 use crate::ctap::status_code::Ctap2StatusCode;
-use crate::ctap::{Channel, Transport};
+use crate::ctap::Channel;
 use persistent_store::{Storage, Store};
 use rng256::Rng256;
 
@@ -12,23 +12,21 @@ pub mod host;
 pub mod test;
 pub mod tock;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SendOrRecvStatus {
-    // FIXME: Replace Option<SendOrRecvStatus>::None with SendOrRecvStatus::TimedOut?
-    Error,
+    TimedOut,
     Sent,
-    Received(Transport),
+    Received,
 }
 
-pub trait IOChannel {
+pub struct SendOrRecvError;
+
+pub type SendOrRecvResult = Result<SendOrRecvStatus, SendOrRecvError>;
+
+pub trait CtapHidChannel {
     // FIXME: Separate type for timeout.
-    fn recv_with_timeout(&mut self, buf: &mut [u8; 64], timeout: isize)
-        -> Option<SendOrRecvStatus>;
-    fn send_or_recv_with_timeout(
-        &mut self,
-        buf: &mut [u8; 64],
-        timeout: isize,
-        transport: Transport,
-    ) -> Option<SendOrRecvStatus>;
+    fn send_or_recv_with_timeout(&mut self, buf: &mut [u8; 64], timeout: isize)
+        -> SendOrRecvResult;
 }
 
 pub trait UserPresence {
@@ -47,7 +45,7 @@ pub trait Env {
     type FirmwareProtection: FirmwareProtection;
     type Write: core::fmt::Write;
     type Customization: Customization;
-    type IOChannel: IOChannel;
+    type CtapHidChannel: CtapHidChannel;
 
     fn rng(&mut self) -> &mut Self::Rng;
     fn user_presence(&mut self) -> &mut Self::UserPresence;
@@ -71,5 +69,7 @@ pub trait Env {
 
     fn customization(&self) -> &Self::Customization;
 
-    fn io_channel(&mut self) -> &mut Self::IOChannel;
+    fn main_hid_channel(&mut self) -> &mut Self::CtapHidChannel;
+    #[cfg(feature = "vendor_hid")]
+    fn vendor_hid_channel(&mut self) -> &mut Self::CtapHidChannel;
 }

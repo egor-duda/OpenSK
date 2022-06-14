@@ -31,14 +31,13 @@ use core::fmt::Write;
 #[cfg(feature = "debug_ctap")]
 use ctap2::clock::CtapClock;
 use ctap2::clock::{new_clock, Clock, ClockInt, KEEPALIVE_DELAY};
-#[cfg(feature = "std")]
-use ctap2::env::host::HostEnv;
 #[cfg(feature = "with_ctap1")]
 use ctap2::env::tock::blink_leds;
-#[cfg(not(feature = "std"))]
-use ctap2::env::tock::TockEnv;
 use ctap2::env::tock::{switch_off_leds, wink_leds};
-use ctap2::env::{IOChannel, SendOrRecvStatus};
+#[cfg(not(feature = "std"))]
+use ctap2::env::tock::{TockEnv, KEEPALIVE_DELAY_TOCK};
+use ctap2::env::{CtapHidChannel, SendOrRecvStatus};
+use ctap2::Transport;
 #[cfg(feature = "debug_ctap")]
 use embedded_time::duration::Microseconds;
 use embedded_time::duration::Milliseconds;
@@ -48,17 +47,18 @@ use libtock_drivers::buttons::{self, ButtonState};
 use libtock_drivers::console::Console;
 #[cfg(feature = "with_ctap1")]
 use libtock_drivers::result::FlexUnwrap;
-// FIXME: Common time type for TockEnv and HostEnv
 // use libtock_drivers::timer::Duration;
 use libtock_drivers::usb_ctap_hid;
+
 #[cfg(feature = "std")]
 use std::path::Path;
 
+#[cfg(feature = "std")]
+use ctap2::env::host::HostEnv;
+
 libtock_core::stack_size! {0x4000}
 
-// FIXME: Common time type for TockEnv and HostEnv
 // const SEND_TIMEOUT: Duration<isize> = Duration::from_ms(1000);
-const KEEPALIVE_DELAY_TOCK: isize = 100;
 const SEND_TIMEOUT: isize = 1000;
 
 fn main() {
@@ -72,7 +72,6 @@ fn main() {
     let boot_time = clock.try_now().unwrap();
     #[cfg(not(feature = "std"))]
     let env = TockEnv::new();
-    // FIXME: Get path for storage from command line
     #[cfg(feature = "std")]
     let env = HostEnv::new(Path::new("opensk-storage.bin"));
     let mut ctap = ctap2::Ctap::new(env, boot_time);
@@ -103,17 +102,32 @@ fn main() {
         }
 
         let mut pkt_request = [0; 64];
-        let transport = match ctap
-            .io_channel()
-            .recv_with_timeout(&mut pkt_request, KEEPALIVE_DELAY_TOCK)
-        {
-            Some(SendOrRecvStatus::Received(transport)) => {
-                #[cfg(feature = "debug_ctap")]
-                print_packet_notice("Received packet", &clock);
-                Some(transport)
-            }
-            Some(_) => panic!("Error receiving packet"),
+        #[cfg(not(feature = "std"))]
+        let usb_interface =
+            match usb_ctap_hid::recv_with_timeout(&mut pkt_request, KEEPALIVE_DELAY_TOCK) {
+                Some(usb_ctap_hid::SendOrRecvStatus::Received(interface)) => {
+                    #[cfg(feature = "debug_ctap")]
+                    print_packet_notice("Received packet", &clock);
+                    Some(interface)
+                }
+                Some(_) => panic!("Error receiving packet"),
+                None => None,
+            };
+        #[cfg(not(feature = "std"))]
+        let transport = match usb_interface {
+            Some(usb_ctap_hid::UsbInterface::MainHid) => Some(Transport::MainHid),
+            #[cfg(feature = "vendor_hid")]
+            Some(usb_ctap_hid::UsbInterface::VendorHid) => Some(Transport::VendorHid),
             None => None,
+        };
+        #[cfg(feature = "std")]
+        let transport = match ctap
+            .main_hid_channel()
+            .recv_with_timeout(&mut pkt_request, 100)
+        {
+            Ok(SendOrRecvStatus::Received) => Some(Transport::MainHid),
+            Ok(SendOrRecvStatus::TimedOut) => None,
+            _ => panic!("Error receiving packet"),
         };
 
         let now = clock.try_now().unwrap();
@@ -140,25 +154,25 @@ fn main() {
             let reply = ctap.process_hid_packet(&pkt_request, transport, now);
             // This block handles sending packets.
             for mut pkt_reply in reply {
-                let status = ctap.io_channel().send_or_recv_with_timeout(
-                    &mut pkt_reply,
-                    SEND_TIMEOUT,
-                    transport,
-                );
-                match status {
-                    None => {
+                let channel = match transport {
+                    Transport::MainHid => ctap.main_hid_channel(),
+                    #[cfg(feature = "vendor_hid")]
+                    Transport::VendorHid => ctap.vendor_hid_channel(),
+                };
+                match channel.send_or_recv_with_timeout(&mut pkt_reply, SEND_TIMEOUT) {
+                    Ok(SendOrRecvStatus::TimedOut) => {
                         #[cfg(feature = "debug_ctap")]
                         print_packet_notice("Sending packet timed out", &clock);
                         // TODO: reset the ctap_hid state.
                         // Since sending the packet timed out, we cancel this reply.
                         break;
                     }
-                    Some(SendOrRecvStatus::Error) => panic!("Error sending packet"),
-                    Some(SendOrRecvStatus::Sent) => {
+                    Err(_) => panic!("Error sending packet"),
+                    Ok(SendOrRecvStatus::Sent) => {
                         #[cfg(feature = "debug_ctap")]
                         print_packet_notice("Sent packet", &clock);
                     }
-                    Some(SendOrRecvStatus::Received(_)) => {
+                    Ok(SendOrRecvStatus::Received) => {
                         #[cfg(feature = "debug_ctap")]
                         print_packet_notice("Received an UNEXPECTED packet", &clock);
                         // TODO: handle this unexpected packet.

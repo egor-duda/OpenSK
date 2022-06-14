@@ -4,8 +4,10 @@ use crate::api::customization::{CustomizationImpl, DEFAULT_CUSTOMIZATION};
 use crate::api::firmware_protection::FirmwareProtection;
 use crate::api::upgrade_storage::UpgradeStorage;
 use crate::ctap::status_code::Ctap2StatusCode;
-use crate::ctap::{Channel, Transport};
-use crate::env::{Env, IOChannel, SendOrRecvStatus, UserPresence};
+use crate::ctap::Channel;
+use crate::env::{
+    CtapHidChannel, Env, SendOrRecvError, SendOrRecvResult, SendOrRecvStatus, UserPresence,
+};
 use persistent_store::{FileOptions, FileStorage, StorageError, StorageResult, Store};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -19,21 +21,21 @@ pub struct HostEnv {
     rng: HostRng256,
     user_presence: HostUserPresence,
     store: Store<FileStorage>,
-    io_channel: HostIOChannel,
+    usb_hid_channel: HostCtapHidChannel,
 }
 
-pub enum HostIOChannel {
+pub enum HostCtapHidChannel {
     Stdio,
     UnixSocket(UnixStream),
     // TODO: add UHIDDevice, TCPStream, Pipe etc.
 }
 
-impl HostIOChannel {
+impl HostCtapHidChannel {
     fn set_read_timeout(&mut self, timeout: isize) -> io::Result<()> {
         match self {
             // FIXME: Implement timeout on Stdio.
-            HostIOChannel::Stdio => Ok(()),
-            HostIOChannel::UnixSocket(unix_stream) => {
+            HostCtapHidChannel::Stdio => Ok(()),
+            HostCtapHidChannel::UnixSocket(unix_stream) => {
                 unix_stream.set_read_timeout(if timeout < 0 {
                     None
                 } else {
@@ -46,8 +48,8 @@ impl HostIOChannel {
     fn set_write_timeout(&mut self, timeout: isize) -> io::Result<()> {
         match self {
             // FIXME: Implement timeout on Stdio.
-            HostIOChannel::Stdio => Ok(()),
-            HostIOChannel::UnixSocket(unix_stream) => {
+            HostCtapHidChannel::Stdio => Ok(()),
+            HostCtapHidChannel::UnixSocket(unix_stream) => {
                 unix_stream.set_write_timeout(if timeout < 0 {
                     None
                 } else {
@@ -60,46 +62,41 @@ impl HostIOChannel {
     fn read_buf(&mut self, buf: &mut [u8; 64], timeout: isize) -> io::Result<()> {
         self.set_read_timeout(timeout)?;
         match self {
-            HostIOChannel::Stdio => io::stdin().read_exact(buf),
-            HostIOChannel::UnixSocket(unix_stream) => unix_stream.read_exact(buf),
+            HostCtapHidChannel::Stdio => io::stdin().read_exact(buf),
+            HostCtapHidChannel::UnixSocket(unix_stream) => unix_stream.read_exact(buf),
         }
     }
 
     fn write_buf(&mut self, buf: &mut [u8; 64], timeout: isize) -> io::Result<()> {
         self.set_write_timeout(timeout)?;
         match self {
-            HostIOChannel::Stdio => {
+            HostCtapHidChannel::Stdio => {
                 io::stdout().write_all(buf)?;
                 io::stdout().flush()
             }
-            HostIOChannel::UnixSocket(unix_stream) => {
+            HostCtapHidChannel::UnixSocket(unix_stream) => {
                 unix_stream.write_all(buf)?;
                 unix_stream.flush()
             }
         }
     }
-}
-
-impl IOChannel for HostIOChannel {
-    fn recv_with_timeout(
-        &mut self,
-        buf: &mut [u8; 64],
-        timeout: isize,
-    ) -> Option<SendOrRecvStatus> {
+    pub fn recv_with_timeout(&mut self, buf: &mut [u8; 64], timeout: isize) -> SendOrRecvResult {
         match self.read_buf(buf, timeout) {
-            Ok(_) => Some(SendOrRecvStatus::Received(Transport::MainHid)),
-            Err(_) => Some(SendOrRecvStatus::Error),
+            Ok(_) => Ok(SendOrRecvStatus::Received),
+            Err(_) => Err(SendOrRecvError),
         }
     }
+}
+
+impl CtapHidChannel for HostCtapHidChannel {
     fn send_or_recv_with_timeout(
         &mut self,
         buf: &mut [u8; 64],
         timeout: isize,
-        _transport: Transport,
-    ) -> Option<SendOrRecvStatus> {
+    ) -> SendOrRecvResult {
         match self.write_buf(buf, timeout) {
-            Ok(_) => Some(SendOrRecvStatus::Sent),
-            Err(_) => Some(SendOrRecvStatus::Error),
+            Ok(_) => Ok(SendOrRecvStatus::Sent),
+            Err(_) => Err(SendOrRecvError),
         }
     }
 }
@@ -156,12 +153,12 @@ impl HostEnv {
         let storage = new_storage(storage_path, options).unwrap();
         let store = Store::new(storage).ok().unwrap();
         // FIXME: Move to parameters.
-        let io_channel = HostIOChannel::Stdio;
+        let usb_hid_channel = HostCtapHidChannel::Stdio;
         HostEnv {
             rng,
             user_presence,
             store,
-            io_channel,
+            usb_hid_channel,
         }
     }
 
@@ -225,7 +222,7 @@ impl Env for HostEnv {
     type UpgradeStorage = Self;
     type Write = TestWrite;
     type Customization = CustomizationImpl;
-    type IOChannel = HostIOChannel;
+    type CtapHidChannel = HostCtapHidChannel;
 
     fn rng(&mut self) -> &mut Self::Rng {
         &mut self.rng
@@ -255,7 +252,12 @@ impl Env for HostEnv {
         &DEFAULT_CUSTOMIZATION
     }
 
-    fn io_channel(&mut self) -> &mut Self::IOChannel {
-        &mut self.io_channel
+    fn main_hid_channel(&mut self) -> &mut Self::CtapHidChannel {
+        &mut self.usb_hid_channel
+    }
+
+    #[cfg(feature = "vendor_hid")]
+    fn vendor_hid_channel(&mut self) -> &mut Self::CtapHidChannel {
+        &mut self.usb_hid_channel
     }
 }

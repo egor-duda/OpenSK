@@ -66,7 +66,7 @@ use crate::api::customization::Customization;
 use crate::api::firmware_protection::FirmwareProtection;
 use crate::api::upgrade_storage::UpgradeStorage;
 use crate::clock::{ClockInt, CtapInstant};
-use crate::env::{Env, IOChannel, SendOrRecvStatus, UserPresence};
+use crate::env::{CtapHidChannel, Env, SendOrRecvStatus, UserPresence};
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -250,29 +250,31 @@ pub fn send_keepalive_up_needed(
     channel: Channel,
     timeout: isize,
 ) -> Result<(), Ctap2StatusCode> {
-    let (transport, cid) = match channel {
-        Channel::MainHid(cid) => (Transport::MainHid, cid),
+    let cid = match &channel {
+        Channel::MainHid(cid) => *cid,
         #[cfg(feature = "vendor_hid")]
-        Channel::VendorHid(cid) => (Transport::VendorHid, cid),
+        Channel::VendorHid(cid) => *cid,
     };
     let keepalive_msg = CtapHid::keepalive(cid, KeepaliveStatus::UpNeeded);
     for mut pkt in keepalive_msg {
-        let status = env
-            .io_channel()
-            .send_or_recv_with_timeout(&mut pkt, timeout, transport);
-        match status {
-            None => {
+        let ctap_hid_channel = match &channel {
+            Channel::MainHid(_) => env.main_hid_channel(),
+            #[cfg(feature = "vendor_hid")]
+            Channel::VendorHid(_) => env.vendor_hid_channel(),
+        };
+        match ctap_hid_channel.send_or_recv_with_timeout(&mut pkt, timeout) {
+            Ok(SendOrRecvStatus::TimedOut) => {
                 debug_ctap!(env, "Sending a KEEPALIVE packet timed out");
                 // TODO: abort user presence test?
             }
-            Some(SendOrRecvStatus::Error) => panic!("Error sending KEEPALIVE packet"),
-            Some(SendOrRecvStatus::Sent) => {
+            Err(_) => panic!("Error sending KEEPALIVE packet"),
+            Ok(SendOrRecvStatus::Sent) => {
                 debug_ctap!(env, "Sent KEEPALIVE packet");
             }
-            Some(SendOrRecvStatus::Received(received_transport)) => {
+            Ok(SendOrRecvStatus::Received) => {
                 // We only parse one packet, because we only care about CANCEL.
                 let (received_cid, processed_packet) = CtapHid::process_single_packet(&pkt);
-                if received_transport != transport || received_cid != &cid {
+                if received_cid != &cid {
                     debug_ctap!(
                         env,
                         "Received a packet on channel ID {:?} while sending a KEEPALIVE packet",
