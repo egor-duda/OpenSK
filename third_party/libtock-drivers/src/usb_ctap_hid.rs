@@ -23,6 +23,7 @@ use core::convert::TryFrom;
 use core::fmt::Write;
 use libtock_core::result::{CommandError, EALREADY, EBUSY, SUCCESS};
 use libtock_core::{callback, syscalls};
+use crate::led;
 
 const DRIVER_NUMBER: usize = 0x20009;
 
@@ -76,6 +77,9 @@ impl TryFrom<usize> for UsbEndpoint {
     type Error = TockError;
 
     fn try_from(endpoint_num: usize) -> Result<Self, TockError> {
+        if endpoint_num == 0 {
+            led::debug_blink(1, 1, 1000);
+        }
         match endpoint_num {
             1 => Ok(UsbEndpoint::MainHid),
             #[cfg(feature = "vendor_hid")]
@@ -180,7 +184,9 @@ fn recv_with_timeout_detail(
                 UsbEndpoint::try_from(endpoint).map(|i| SendOrRecvStatus::Received(i))
             }
             // Unknown direction or "transmitted" sent by the kernel.
-            _ => Err(OutOfRangeError.into()),
+            _ => {
+                Err(OutOfRangeError.into())
+            }
         }));
     };
 
@@ -190,11 +196,13 @@ fn recv_with_timeout_detail(
         &mut alarm,
     )?;
 
+
     // Setup a time-out callback.
     let mut timeout_callback = timer::with_callback(|_, _| {
         status.set(Some(Ok(SendOrRecvStatus::Timeout)));
     });
     let mut timeout = timeout_callback.init()?;
+
     let timeout_alarm = timeout.set_alarm(timeout_delay)?;
 
     // Trigger USB reception.
@@ -251,6 +259,9 @@ fn recv_with_timeout_detail(
         }
     }
 
+    if let Err(_) = &status {
+        led::debug_blink(2, 1, 1000);
+    }
     core::mem::drop(result);
     core::mem::drop(subscription);
     core::mem::drop(result_code);

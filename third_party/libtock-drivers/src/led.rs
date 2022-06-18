@@ -1,4 +1,5 @@
 use crate::result::{OtherError, TockError, TockResult};
+use crate::timer::{self, Duration};
 use libtock_core::syscalls;
 
 const DRIVER_NUMBER: usize = 0x00002;
@@ -81,4 +82,28 @@ impl Iterator for LedIter {
             None
         }
     }
+}
+
+pub fn debug_blink(led: usize, count: usize, wait: isize) {
+    if let Ok(_) = dbg_blink(0, 1) {}
+    if let Ok(_) = dbg_blink(led, count) {}
+    if let Ok(_) = timer::sleep(Duration::from_ms(wait)) {}
+}
+
+fn dbg_blink(led: usize, count: usize) -> TockResult<()> {
+    switch_off_leds()?;
+    for _ in 0..count {
+        get(led)?.on()?;
+        timer::sleep(Duration::from_ms(10))?;
+        get(led)?.off()?;
+    }
+    switch_off_leds()?;
+    Ok(())
+}
+
+fn switch_off_leds() -> TockResult<()> {
+    for led in all()? {
+        led.off()?;
+    }
+    Ok(())
 }

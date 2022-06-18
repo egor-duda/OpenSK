@@ -45,6 +45,7 @@ use libtock_drivers::console::Console;
 use libtock_drivers::result::FlexUnwrap;
 use libtock_drivers::timer::Duration;
 use libtock_drivers::usb_ctap_hid;
+use libtock_drivers::led;
 
 libtock_core::stack_size! {0x4000}
 
@@ -89,18 +90,22 @@ fn main() {
 
         let mut pkt_request = [0; 64];
         let usb_endpoint =
-            match usb_ctap_hid::recv_with_timeout(&mut pkt_request, KEEPALIVE_DELAY_TOCK)
-                .flex_unwrap()
-            {
-                usb_ctap_hid::SendOrRecvStatus::Received(endpoint) => {
+            match usb_ctap_hid::recv_with_timeout(&mut pkt_request, KEEPALIVE_DELAY_TOCK) {
+                Ok(usb_ctap_hid::SendOrRecvStatus::Received(endpoint)) => {
                     #[cfg(feature = "debug_ctap")]
                     print_packet_notice("Received packet", &clock);
                     Some(endpoint)
                 }
-                usb_ctap_hid::SendOrRecvStatus::Sent => {
+                Ok(usb_ctap_hid::SendOrRecvStatus::Sent) => {
                     panic!("Returned transmit status on receive")
                 }
-                usb_ctap_hid::SendOrRecvStatus::Timeout => None,
+                Ok(usb_ctap_hid::SendOrRecvStatus::Timeout) => {
+                    None
+                }
+                Err(_) => {
+                    led::debug_blink(3, 1, 1000);
+                    panic!("error")
+                }
             };
 
         let now = clock.try_now().unwrap();
