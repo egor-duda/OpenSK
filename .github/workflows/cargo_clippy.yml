@@ -23,6 +23,7 @@ jobs:
         run: ./setup.sh
 
       - uses: actions-rs/clippy-check@v1
+        if: github.repository == 'google/OpenSK'
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           args: --all-targets --features std
