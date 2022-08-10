@@ -83,7 +83,6 @@ use crypto::hmac::hmac_256;
 use crypto::sha256::Sha256;
 use crypto::{ecdsa, Hash256};
 use embedded_time::duration::Milliseconds;
-use libtock_drivers::usb_ctap_hid::UsbEndpoint;
 use rng256::Rng256;
 use sk_cbor as cbor;
 use sk_cbor::cbor_map_options;
@@ -284,12 +283,7 @@ fn send_keepalive_up_needed(
             Ok(SendOrRecvStatus::Sent) => {
                 debug_ctap!(env, "Sent KEEPALIVE packet");
             }
-            Ok(SendOrRecvStatus::Received(endpoint)) => {
-                let rx_transport = match endpoint {
-                    UsbEndpoint::MainHid => Transport::MainHid,
-                    #[cfg(feature = "vendor_hid")]
-                    UsbEndpoint::VendorHid => Transport::VendorHid,
-                };
+            Ok(SendOrRecvStatus::Received(rx_transport)) => {
                 if rx_transport != transport {
                     debug_ctap!(
                         env,

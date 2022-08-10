@@ -171,10 +171,14 @@ fn main() {
                     #[cfg(feature = "debug_ctap")]
                     print_packet_notice("Sent packet", &clock);
                 }
-                Ok(SendOrRecvStatus::Received(ep)) => {
+                Ok(SendOrRecvStatus::Received(transport)) => {
                     #[cfg(feature = "debug_ctap")]
                     print_packet_notice("Received another packet", &clock);
-                    usb_endpoint = Some(ep);
+                    usb_endpoint = match transport {
+                        Transport::MainHid => Some(UsbEndpoint::MainHid),
+                        #[cfg(feature = "vendor_hid")]
+                        Transport::VendorHid => Some(UsbEndpoint::VendorHid),
+                    };
 
                     // Copy to incoming packet to local buffer to be consistent
                     // with the receive flow.

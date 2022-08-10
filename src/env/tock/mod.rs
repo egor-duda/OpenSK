@@ -20,6 +20,7 @@ use crate::api::firmware_protection::FirmwareProtection;
 use crate::api::user_presence::{UserPresence, UserPresenceError, UserPresenceResult};
 use crate::api::{attestation_store, key_store};
 use crate::clock::{ClockInt, KEEPALIVE_DELAY_MS};
+use crate::ctap::Transport;
 use crate::env::Env;
 use core::cell::Cell;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -54,9 +55,11 @@ impl HidConnection for TockHidConnection {
         ) {
             Ok(usb_ctap_hid::SendOrRecvStatus::Timeout) => Ok(SendOrRecvStatus::Timeout),
             Ok(usb_ctap_hid::SendOrRecvStatus::Sent) => Ok(SendOrRecvStatus::Sent),
-            Ok(usb_ctap_hid::SendOrRecvStatus::Received(recv_endpoint)) => {
-                Ok(SendOrRecvStatus::Received(recv_endpoint))
-            }
+            Ok(usb_ctap_hid::SendOrRecvStatus::Received(recv_endpoint)) => match recv_endpoint {
+                UsbEndpoint::MainHid => Ok(SendOrRecvStatus::Received(Transport::MainHid)),
+                #[cfg(feature = "vendor_hid")]
+                UsbEndpoint::VendorHid => Ok(SendOrRecvStatus::Received(Transport::VendorHid)),
+            },
             _ => Err(SendOrRecvError),
         }
     }
