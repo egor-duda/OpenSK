@@ -178,7 +178,7 @@ impl UserPresence for TockEnv {
         }
     }
 
-    fn check_complete(&mut self) {
+    fn check_complete(&mut self, _result: &UserPresenceResult) {
         switch_off_leds();
     }
 }

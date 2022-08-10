@@ -140,7 +140,7 @@ impl UserPresence for TestUserPresence {
     fn wait_with_timeout(&mut self, _timeout: Milliseconds<ClockInt>) -> UserPresenceResult {
         (self.check)()
     }
-    fn check_complete(&mut self) {}
+    fn check_complete(&mut self, _result: &UserPresenceResult) {}
 }
 
 impl FirmwareProtection for TestEnv {

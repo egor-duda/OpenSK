@@ -23,6 +23,9 @@ use persistent_store::{Storage, Store};
 use rng256::Rng256;
 
 #[cfg(feature = "std")]
+pub mod host;
+
+#[cfg(feature = "std")]
 pub mod test;
 pub mod tock;
 

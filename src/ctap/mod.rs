@@ -372,7 +372,7 @@ fn check_user_presence(env: &mut impl Env, channel: Channel) -> Result<(), Ctap2
         }
     }
 
-    env.user_presence().check_complete();
+    env.user_presence().check_complete(&result);
     result.map_err(|e| e.into())
 }
 

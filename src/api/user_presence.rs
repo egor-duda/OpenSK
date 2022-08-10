@@ -41,5 +41,5 @@ pub trait UserPresence {
     /// Finalizes a user presence check.
     ///
     /// Must be called after [`Self::check_init`].
-    fn check_complete(&mut self);
+    fn check_complete(&mut self, result: &UserPresenceResult);
 }
